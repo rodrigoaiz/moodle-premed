@@ -1,0 +1,14 @@
+FROM node:lts-alpine
+
+WORKDIR /app
+
+# Instala pnpm si lo prefieres, o usa npm/yarn
+RUN npm install -g pnpm
+
+COPY package.json package-lock.json ./ 
+RUN npm install 
+COPY . .
+
+EXPOSE 4321
+
+CMD ["npm", "run", "dev"]

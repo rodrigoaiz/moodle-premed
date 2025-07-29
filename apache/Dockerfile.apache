@@ -1,0 +1,20 @@
+FROM httpd:2.4-bullseye
+
+# Define el UID/GID del usuario del host
+ARG PUID=1000
+ARG PGID=1000
+
+# Si el grupo www-data no tiene el GID correcto, lo modifica.
+# Luego, crea o modifica el usuario www-data con el UID/GID especificado
+# y lo asigna al grupo www-data.
+RUN set -x \
+    && if [ "$(getent group www-data | cut -d: -f3)" != "$PGID" ]; then \
+         groupmod -g $PGID www-data; \
+       fi \
+    && if id -u www-data >/dev/null 2>&1; then \
+         usermod -u $PUID -g $PGID www-data; \
+       else \
+         adduser --uid $PUID --gid $PGID --gecos "" --disabled-password --home /nonexistent www-data; \
+       fi \
+    && chown -R www-data:www-data /usr/local/apache2/htdocs \
+    && chown -R www-data:www-data /usr/local/apache2/logs

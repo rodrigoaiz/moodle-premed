@@ -1,0 +1,134 @@
+version: '3.8'
+
+services:
+  # Apache HTTP Server como proxy inverso principal
+  apache:
+    build:
+      context: ./apache
+      dockerfile: Dockerfile.apache
+      args:
+        PUID: 1000
+        PGID: 1000
+    container_name: moodle-premed-apache-1
+    restart: unless-stopped
+    ports:
+      - "4324:80" # Mapea el puerto 80 del contenedor (donde Apache escucha) a tu puerto 4324 del host
+    volumes:
+      - ./apache/httpd.conf:/usr/local/apache2/conf/httpd.conf:ro
+      - ./moodle:/var/www/html/moodle
+    networks:
+      - app-network
+    depends_on:
+      - astro-dev  # Apache necesita Astro funcionando para proxy
+      - moodle-php # Apache necesita Moodle PHP funcionando para proxy
+
+  # Servicio de Moodle PHP-FPM
+  moodle-php:
+    build:
+      context: ./moodle
+      dockerfile: Dockerfile.moodle # Usa tu Dockerfile personalizado para Moodle
+    container_name: moodle-premed-moodle-php-1
+    restart: unless-stopped
+    volumes:
+      # Monta el código de Moodle desde tu host al contenedor
+      - ./moodle:/var/www/html/moodle:rw
+      # Volumen nombrado para los datos persistentes de Moodle (archivos, caché, etc.)
+      - moodle_data:/var/www/moodledata
+    networks:
+      - app-network
+    environment:
+      # Variables de entorno para la conexión a la base de datos de Moodle
+      MOODLE_DB_HOST: moodle-db # Nombre del servicio de la DB en la red Docker
+      MOODLE_DB_USER: moodleuser
+      MOODLE_DB_PASSWORD: moodlepassword
+      MOODLE_DB_NAME: moodle_db
+      # URL externa de Moodle, crucial para que Moodle genere enlaces correctamente
+      MOODLE_WWWROOT: http://132.248.218.76:4324/moodle
+      # Otras configuraciones PHP si fueran necesarias (ej. memory_limit)
+      # PHP_MEMORY_LIMIT: 256M
+
+  # Base de Datos para Moodle (MySQL 8.0)
+  moodle-db:
+    image: mysql:8.0
+    container_name: moodle-premed-moodle-db-1
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword # ¡CAMBIA ESTO EN PRODUCCIÓN!
+      MYSQL_DATABASE: moodle_db
+      MYSQL_USER: moodleuser
+      MYSQL_PASSWORD: moodlepassword
+    volumes:
+      - db_data:/var/lib/mysql # Volumen nombrado para la persistencia de datos de la DB
+    networks:
+      - app-network
+
+  # Backend de SSO (Single Sign-On)
+  sso-backend:
+    build:
+      context: ./sso-backend # Ruta a tu Dockerfile para el backend de SSO
+      dockerfile: Dockerfile
+    container_name: moodle-premed-sso-backend-1
+    restart: unless-stopped
+    ports:
+      - "3001:3000" # Mapea el puerto interno 3000 del contenedor al puerto 3001 del host
+    volumes:
+      - ./sso-backend:/app # Monta el código fuente
+      - /app/node_modules # Evita que los node_modules locales sobrescriban los del contenedor
+    environment:
+      MOODLE_OAUTH_CLIENT_ID: "your_moodle_oauth_client_id" # ¡CAMBIA ESTO!
+      MOODLE_OAUTH_CLIENT_SECRET: "your_moodle_oauth_client_secret" # ¡CAMBIA ESTO!
+      MOODLE_URL: "http://moodle-php" # URL interna de Moodle para el SSO
+      ASTRO_PORTAL_EXTERNAL_URL: "http://132.248.218.76:4324" # URL externa del portal Astro
+    networks:
+      - app-network
+    healthcheck: # Healthcheck para el backend de SSO
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 45s
+
+  # Redis para caché de Moodle (opcional, pero recomendado para rendimiento)
+  redis:
+    image: redis:latest
+    container_name: moodle-premed-redis-1
+    restart: unless-stopped
+    networks:
+      - app-network
+
+  # MailHog para simular envío de correos en desarrollo
+  mailhog:
+    image: mailhog/mailhog
+    container_name: moodle-premed-mailhog-1
+    restart: unless-stopped
+    ports:
+      - "8025:8025" # Interfaz web de MailHog en tu host
+    networks:
+      - app-network
+
+  # Frontend de Astro
+  astro-dev:
+    build:
+      context: ./astro-app # Ruta a tu Dockerfile para Astro
+      dockerfile: Dockerfile.dev
+    container_name: moodle-premed-astro-dev-1
+    restart: unless-stopped
+    # No exponemos puertos directamente aquí, Apache hará proxy al puerto 4321 interno
+    networks:
+      - app-network
+    volumes:
+      - ./astro-app:/app # Monta el código fuente
+      - /app/node_modules # Evita que los node_modules locales sobrescriban los del contenedor
+    environment:
+      # Variables de entorno para Astro si las necesita
+      NODE_ENV: development
+
+# Definición de redes para la comunicación interna entre servicios
+networks:
+  app-network:
+    driver: bridge # Red de tipo puente para la comunicación entre contenedores
+
+# Definición de volúmenes persistentes para datos importantes
+volumes:
+  moodle_data: # Para el directorio moodledata (archivos de cursos, usuarios, etc.)
+  db_data:     # Para los datos de la base de datos MySQL
